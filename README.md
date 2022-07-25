@@ -1,0 +1,1 @@
+This library contains helper for make xml serialization and deserialization process easier.
