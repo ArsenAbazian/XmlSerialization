@@ -26,7 +26,7 @@ namespace XmlSerialization {
             if(res == null)
                 return false;
 
-            obj.OnStartDeserialize();
+            obj.OnBeginDeserialize();
             PropertyInfo[] props = obj.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
             foreach(var prop in props) {
                 if(!prop.CanRead)
@@ -121,7 +121,9 @@ namespace XmlSerialization {
             try {
                 XmlSerializer formatter = new XmlSerializer(t, GetExtraTypes(t));
                 using(FileStream fs = new FileStream(tmpFile, FileMode.Create)) {
+                    obj.OnBeginSerialize();
                     formatter.Serialize(fs, obj);
+                    obj.OnEndSerialize();
                 }
                 if(File.Exists(fullName))
                     File.Delete(fullName);
@@ -137,8 +139,10 @@ namespace XmlSerialization {
 
     public interface ISupportSerialization {
         string FileName { get; set; }
-        void OnStartDeserialize();
+        void OnBeginDeserialize();
         void OnEndDeserialize();
+        void OnBeginSerialize();
+        void OnEndSerialize();
     }
 
     public class AllowDynamicTypesAttribute : Attribute {
