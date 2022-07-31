@@ -32,7 +32,7 @@ Example:
 
         public bool Load(string fileName) {
             FullPath = fileName;
-            if(SerializationHelper.Load(this, GetType(), fileName)) {
+            if(SerializationHelper.Current.Load(this, GetType(), fileName)) {
                 FileName = Path.GetFileName(fileName);
                 return true;
             }
