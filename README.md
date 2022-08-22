@@ -7,7 +7,7 @@ The SerializationHelper class uses the standard XmlSerializer to save and restor
 2. For the XmlSerializer class you should specify all the classes which are allowed to deserialize. Imagine you have object that has collection of items of A class. This collection can hold items of different classes, which are descendant of class A. For XmlSerialize you have to specify all the descendant classes (or you will get the exception when deserialize) using XmlInclude attribute, or collect all the types and pass them in the XmlSerialzer constructor. The SerialzerHelper class do it for you. All you need is to specify base classes in XmlInclude attribute and SerialzerHelper will search in loaded assemblies for all descendant classes and pass them in XmlSerialzer constructor. Please add AllowDynamicTypes attribute to allow the SerialzerHelper class collect all the needed types in assemblies
 
 Example: 
-
+```csharp
     [Serializable]
     [AllowDynamicTypes]
     [XmlInclude(typeof(WfConnectionPoint))]
@@ -54,3 +54,4 @@ Example:
     public class WfAbortNode : WfNode { }
     public class WfSwitchNode : WfNode { }
     public class WfProperStoreNode : WfNode { }
+   ```
