@@ -7,11 +7,11 @@ using System.Threading.Tasks;
 namespace XmlSerialization {
     [Serializable]
     public class RecentItemsList : ISupportSerialization {
-        public string ThemeName { get; set; }
-        public string PalletteName { get; set; }
+        public string ThemeName { get; set; } = "";
+        public string PalletteName { get; set; } = "";
 
         public List<string> Items { get; } = new List<string>();
-        public string FileName { get; set; }
+        public string FileName { get; set; } = "";
 
         public void AddFile(string file) {
             if(Items.Contains(file))

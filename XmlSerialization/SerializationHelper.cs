@@ -9,8 +9,18 @@ using System.Threading.Tasks;
 using System.Xml.Serialization;
 
 namespace XmlSerialization {
-    public static class SerializationHelper {
-        public static void AssignValueProperties(object src, object dst) {
+    public class SerializationHelper : ISerializationHelper {
+        static ISerializationHelper current = new SerializationHelper();
+        public static ISerializationHelper Current {
+            get {
+                if(current == null)
+                    current = new SerializationHelper();
+                return current;
+            }
+            set { current = value; }
+        }
+
+        public virtual void AssignValueProperties(object src, object dst) {
             PropertyInfo[] props = src.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
             foreach(var prop in props) {
                 if(!prop.CanRead)
@@ -21,11 +31,8 @@ namespace XmlSerialization {
                 }
             }
         }
-        public static bool Load(ISupportSerialization obj, Type t, string fileName) {
-            object res = FromFile(fileName, t);
-            if(res == null)
-                return false;
 
+        protected bool LoadCore(ISupportSerialization obj, ISupportSerialization loaded, Type t) {
             obj.OnBeginDeserialize();
             PropertyInfo[] props = obj.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
             foreach(var prop in props) {
@@ -34,24 +41,30 @@ namespace XmlSerialization {
                 if(prop.GetCustomAttribute(typeof(XmlIgnoreAttribute)) != null)
                     continue;
                 if(prop.CanWrite && prop.GetAccessors().Length == 2) {
-                    prop.SetValue(obj, prop.GetValue(res, null));
+                    prop.SetValue(obj, prop.GetValue(loaded, null));
                 }
                 else {
-                    object value = prop.GetValue(res, null);
+                    var value = prop.GetValue(loaded, null);
                     if(value is IList) {
                         IList srcList = (IList)value;
-                        IList dstList = (IList)prop.GetValue(obj, null);
-                        dstList.Clear();
-                        for(int i = 0; i < srcList.Count; i++) {
-                            dstList.Add(srcList[i]);
+                        var dl = prop.GetValue(obj, null);
+                        if(dl is IList) {
+                            IList dstList = (IList)dl;
+                            dstList.Clear();
+                            for(int i = 0; i < srcList.Count; i++) {
+                                dstList.Add(srcList[i]);
+                            }
                         }
                     }
                     else if(value is IDictionary) {
                         IDictionary srcDict = (IDictionary)value;
-                        IDictionary dstDict = (IDictionary)prop.GetValue(obj, null);
-                        dstDict.Clear();
-                        foreach(object key in srcDict.Keys) {
-                            dstDict.Add(key, srcDict[key]);
+                        var dict = prop.GetValue(obj, null);
+                        if(dict is IDictionary) {
+                            IDictionary dstDict = (IDictionary)dict;
+                            dstDict.Clear();
+                            foreach(object key in srcDict.Keys) {
+                                dstDict.Add(key, srcDict[key]);
+                            }
                         }
                     }
                 }
@@ -59,7 +72,40 @@ namespace XmlSerialization {
             obj.OnEndDeserialize();
             return true;
         }
-        public static ISupportSerialization FromFile(string fileName, Type t) {
+
+        public bool Save(ISupportSerialization obj, Type t, StringBuilder b) {
+            if(b == null)
+                return false;
+            try {
+                XmlSerializer formatter = new XmlSerializer(t, GetExtraTypes(t));
+                obj.OnBeginSerialize();
+                TextWriter writer = new StringWriter(b);
+                formatter.Serialize(writer, obj);
+                obj.OnEndSerialize();
+            }
+            catch(Exception) {
+                return false;
+            }
+
+            return true;
+        }
+
+        public bool LoadFromString(ISupportSerialization obj, Type t, string text) {
+            if(text == null)
+                return true;
+            var loaded = FromString(text, t);
+            if(loaded == null)
+                return false;
+            return LoadCore(obj, loaded, t);
+        }
+
+        public bool Load(ISupportSerialization obj, Type t, string fileName) {
+            var loaded = FromFile(fileName, t);
+            if(loaded == null)
+                return false;
+            return LoadCore(obj, loaded, t);
+        }
+        public ISupportSerialization FromFile(string fileName, Type t) {
             if(string.IsNullOrEmpty(fileName))
                 return null;
             if(!File.Exists(fileName))
@@ -80,43 +126,91 @@ namespace XmlSerialization {
             }
         }
 
-        public static Type[] GetExtraTypes(Type t) {
-            var allow = t.GetCustomAttribute<AllowDynamicTypesAttribute>();
-            if(allow == null || !allow.Allow)
-                return new Type[0];
-            var attr = t.GetCustomAttributes<XmlIncludeAttribute>().ToList();
-            if(attr.Count == 0)
-                return new Type[0];
-            var asms = Assembly.GetEntryAssembly().GetReferencedAssemblies().ToList(); // AppDomain.CurrentDomain.GetAssemblies();
+        public ISupportSerialization FromString(string text, Type t) {
+            if(string.IsNullOrEmpty(text))
+                return null;
+            var extra = GetExtraTypes(t);
+            XmlSerializer formatter = new XmlSerializer(t, extra);
+            try {
+                ISupportSerialization obj = null;
+                TextReader r = new StringReader(text);
+                obj = (ISupportSerialization)formatter.Deserialize(r);
+                obj.OnEndDeserialize();
+                return obj;
+            }
+            catch(Exception) {
+                return null;
+            }
+        }
+
+        protected virtual void GetExtraTypes(List<Type> extra, Type t) {
+            var baseTypes = t.GetCustomAttributes<XmlIncludeAttribute>().ToList();
+            var asms = Assembly.GetEntryAssembly().GetReferencedAssemblies().ToList();
             asms.Add(Assembly.GetEntryAssembly().GetName());
-            List<Type> extra = new List<Type>();
+            Dictionary<string, Assembly> processedAssemblies = new Dictionary<string, Assembly>();
             foreach(var aname in asms) {
                 try {
-                    if(aname.Name.StartsWith("DevExpress"))
-                        continue;
                     Assembly assembly = Assembly.Load(aname);
-                    foreach(Type tp in assembly.GetTypes()) {
-                        if(!tp.IsClass && tp.IsAbstract)
+                    var name = assembly.GetName();
+                    if(name != null) {
+                        var key = name.Name;
+                        if(key != null && processedAssemblies.ContainsKey(key))
                             continue;
-                        foreach(var a in attr) {
-                            if(a.Type.IsAssignableFrom(tp))
-                                extra.Add(tp);
-                        }
+                        processedAssemblies.Add(key, assembly);
+                        AddExtraTypes(extra, baseTypes, assembly);
                     }
                 }
                 catch(Exception) { }
             }
+            foreach(Assembly assembly in AppDomain.CurrentDomain.GetAssemblies()) {
+                if(processedAssemblies.ContainsKey(assembly.GetName().Name))
+                    continue;
+                processedAssemblies.Add(assembly.GetName().Name, assembly);
+                try {
+                    AddExtraTypes(extra, baseTypes, assembly);
+                }
+                catch(Exception) { }
+            }
+        }
+
+        public virtual Type[] GetExtraTypes(Type t) {
+            var allow = t.GetCustomAttribute<AllowDynamicTypesAttribute>();
+            if(allow == null || !allow.Allow)
+                return new Type[0];
+            List<Type> extra = new List<Type>();
+            GetExtraTypes(extra, t);
+            
             return extra.ToArray();
         }
 
-        public static bool Save(ISupportSerialization obj, Type t, string fullName) {
-            string path = Path.GetDirectoryName(fullName);
-            string file = Path.GetFileName(fullName);
+        protected virtual void AddExtraTypes(List<Type> extra, List<XmlIncludeAttribute> baseTypes, Assembly assembly) {
+            foreach(Type tp in assembly.GetTypes()) {
+                if(!tp.IsClass && tp.IsAbstract)
+                    continue;
+                foreach(var a in baseTypes) {
+                    if(a != null && a.Type.IsAssignableFrom(tp)) {
+                        if(!extra.Contains(tp)) {
+                            extra.Add(tp);
+                            GetExtraTypes(extra, tp);
+                        }
+                    }
+                }
+            }
+        }
+
+        public bool Save(ISupportSerialization obj, Type t, string path) {
+            if(!string.IsNullOrEmpty(Path.GetExtension(path))) {
+                obj.FileName = Path.GetFileName(obj.FileName);
+                path = Path.GetDirectoryName(path);
+            }
+            if(File.Exists(obj.FileName))
+                obj.FileName = Path.GetFileName(obj.FileName);
+            string fullName = string.IsNullOrEmpty(path) ? obj.FileName : path + "\\" + obj.FileName;
             string tmpFile = Path.GetFileNameWithoutExtension(fullName) + ".tmp";
             if(!string.IsNullOrEmpty(path))
                 tmpFile = path + "\\" + tmpFile;
 
-            if(string.IsNullOrEmpty(file))
+            if(string.IsNullOrEmpty(obj.FileName))
                 return false;
             try {
                 XmlSerializer formatter = new XmlSerializer(t, GetExtraTypes(t));
@@ -135,6 +229,15 @@ namespace XmlSerialization {
 
             return true;
         }
+    }
+
+    public interface ISerializationHelper {
+        bool Load(ISupportSerialization obj, Type type, string fileName);
+        bool LoadFromString(ISupportSerialization obj, Type type, string text);
+        bool Save(ISupportSerialization obj, Type type, string fullName);
+        bool Save(ISupportSerialization obj, Type type, StringBuilder b);
+        ISupportSerialization FromFile(string fileName, Type type);
+        Type[] GetExtraTypes(Type t);
     }
 
     public interface ISupportSerialization {
